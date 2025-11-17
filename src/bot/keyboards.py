@@ -108,14 +108,21 @@ def kb_create_image() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Создать изображение", callback_data="create_image")],
     ])
     
-def kb_gen_step_back(vertical: bool = True) -> InlineKeyboardMarkup:
-    """Клавиатура с переключателем ориентации"""
-    checkbox = "✅" if vertical else "☑️"
-    text = f"{checkbox} Вертикально" if vertical else f"{checkbox} Горизонтально"
+# def kb_gen_step_back(vertical: bool = True) -> InlineKeyboardMarkup:
+#     """Клавиатура с переключателем ориентации"""
+#     checkbox = "✅" if vertical else "☑️"
+#     text = f"{checkbox} Вертикально" if vertical else f"{checkbox} Горизонтально"
     
+#     return InlineKeyboardMarkup(
+#         inline_keyboard=[
+#             [InlineKeyboardButton(text=text, callback_data=f"toggle_orientation_{vertical}")]
+#         ]
+#     )    
+    
+def kb_gen_step_back() -> InlineKeyboardMarkup:
+    """Клавиатура для возврата к загрузке фото"""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=text, callback_data=f"toggle_orientation_{vertical}")]
+            [InlineKeyboardButton(text="↩️ Назад", callback_data="back_to_images")]
         ]
     )    
-    
