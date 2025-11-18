@@ -15,7 +15,7 @@ class User(Base):
     balance_credits: Mapped[int] = mapped_column(Integer, default=0)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     # ✅ Настройки генерации
-    image_resolution: Mapped[str] = mapped_column(String(10), default="1K")
+    image_resolution: Mapped[str] = mapped_column(String(10), default="4K")
     max_images: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

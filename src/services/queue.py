@@ -151,7 +151,7 @@ async def process_generation(
     seed: Optional[int] = None
 ) -> Dict[str, Any] | None:
     bot: Bot = ctx["bot"]
-    api = SeedreamClient()
+    api = SeedreamClient()  # 🆕 Будем закрывать в finally
     cid = uuid4().hex[:12]
 
     log.info(_j("queue.process.start", cid=cid, chat_id=chat_id, photos_in=len(photos or []),
@@ -270,6 +270,14 @@ async def process_generation(
         except Exception:
             pass
         return {"ok": False, "error": "internal"}
+    
+    finally:
+        # 🆕 ВСЕГДА закрываем HTTP клиент SeedreamClient
+        try:
+            await api.aclose()
+            log.info(_j("queue.api_client_closed", cid=cid))
+        except Exception as e:
+            log.warning(_j("queue.api_client_close_failed", cid=cid, error=str(e)))
 
 class WorkerSettings:
     functions = [process_generation, broadcast_send]

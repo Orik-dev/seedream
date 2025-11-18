@@ -69,14 +69,14 @@ async def cleanup_fsm_old_states():
 
 async def cleanup_old_temp_files():
     """Удаляет файлы старше 6 часов из /tmp/nanobanana"""
-    temp_dir = Path("/tmp/nanobanana")
+    temp_dir = Path("/tmp/seedream")
     
     if not temp_dir.exists():
         log.info("📁 Директория /tmp/nanobanana не существует")
         return
     
     now = time.time()
-    max_age = 6 * 3600  # 6 часов
+    max_age = 1 * 3600
     deleted = 0
     
     try:

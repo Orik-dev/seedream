@@ -103,7 +103,7 @@ async def _clear_wait_and_reset(bot, chat_id: int, *, back_to: str = "auto") -> 
 
 @router.post("/webhook/seedream")
 async def seedream_callback(req: Request):
-    """✅ Вебхук для получения результатов от Seedream V4 (поддержка множественных изображений)"""
+    """✅ Вебхук с защитой от двойного списания"""
     token = req.query_params.get("t")
     if token != settings.WEBHOOK_SECRET_TOKEN:
         raise HTTPException(403, "forbidden")
@@ -131,10 +131,7 @@ async def seedream_callback(req: Request):
     except Exception:
         result_json = {}
     
-    # ✅ resultUrls теперь список
     result_urls = result_json.get("resultUrls", [])
-    
-    # ✅ Извлекаем seed из ответа
     seed = result_json.get("seed")
     if seed:
         try:
@@ -166,7 +163,6 @@ async def seedream_callback(req: Request):
                 log.info(json.dumps({"event": "webhook.already_delivered", "task_id": task_id}, ensure_ascii=False))
                 return JSONResponse({"ok": True})
 
-            # Обновляем статус
             await s.execute(
                 update(Task)
                 .where(Task.id == task.id)
@@ -187,33 +183,42 @@ async def seedream_callback(req: Request):
                     log.info(json.dumps({"event": "webhook.completed.no_urls", "task_id": task_id}, ensure_ascii=False))
                     return JSONResponse({"ok": True})
 
-                # ✅ Списание кредитов = количество изображений
-                num_images = len(result_urls)
-                before = int(user.balance_credits or 0)
-                new_balance = max(0, before - num_images)
-                await s.execute(
-                    update(User).where(User.id == user.id).values(balance_credits=new_balance)
-                )
-                await s.commit()
-
-                log.info(json.dumps({
-                    "event": "credits_deducted",
-                    "task_id": task_id,
-                    "user_id": user.id,
-                    "images": num_images,
-                    "before": before,
-                    "after": new_balance
-                }, ensure_ascii=False))
-
-                # Маркер "списано"
+                # 🆕 ИДЕМПОТЕНТНОСТЬ - проверка ПЕРЕД списанием
+                idempotency_key = f"credits:debited:{task_id}"
+                r_cache = aioredis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=settings.REDIS_DB_CACHE)
+                
                 try:
-                    r = aioredis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=settings.REDIS_DB_CACHE)
-                    await r.setex(f"credits:debited:{task_id}", 86400, "1")
-                    await r.aclose()
-                except Exception:
-                    pass
+                    already_debited = await r_cache.exists(idempotency_key)
+                    if already_debited:
+                        log.warning(json.dumps({
+                            "event": "webhook.already_debited",
+                            "task_id": task_id
+                        }, ensure_ascii=False))
+                    else:
+                        # СПИСЫВАЕМ только если ещё НЕ списано
+                        num_images = len(result_urls)
+                        before = int(user.balance_credits or 0)
+                        new_balance = max(0, before - num_images)
+                        await s.execute(
+                            update(User).where(User.id == user.id).values(balance_credits=new_balance)
+                        )
+                        await s.commit()
 
-                # ✅ Скачать все результаты
+                        log.info(json.dumps({
+                            "event": "credits_deducted",
+                            "task_id": task_id,
+                            "user_id": user.id,
+                            "images": num_images,
+                            "before": before,
+                            "after": new_balance
+                        }, ensure_ascii=False))
+
+                        # Ставим маркер "списано"
+                        await r_cache.setex(idempotency_key, 86400, "1")
+                finally:
+                    await r_cache.aclose()
+
+                # Скачивание файлов
                 out_dir = "/tmp/seedream"
                 os.makedirs(out_dir, exist_ok=True)
                 
@@ -224,13 +229,41 @@ async def seedream_callback(req: Request):
                     for idx, image_url in enumerate(result_urls):
                         local_path = os.path.join(out_dir, f"{task_id}_{idx}.png")
                         
+                        try:
+                            head_resp = await client.head(image_url, timeout=10)
+                            content_length = int(head_resp.headers.get("content-length", 0))
+                            
+                            if content_length > 20 * 1024 * 1024:
+                                log.warning(json.dumps({
+                                    "event": "webhook.image_too_large",
+                                    "task_id": task_id,
+                                    "image_idx": idx,
+                                    "size_mb": content_length / 1024 / 1024
+                                }, ensure_ascii=False))
+                                download_errors += 1
+                                continue
+                        except Exception:
+                            pass
+                        
                         last_exc = None
                         for attempt in range(3):
                             try:
                                 r = await client.get(image_url, timeout=120)
                                 r.raise_for_status()
+                                
+                                content = r.content
+                                if len(content) > 20 * 1024 * 1024:
+                                    log.warning(json.dumps({
+                                        "event": "webhook.downloaded_too_large",
+                                        "task_id": task_id,
+                                        "image_idx": idx,
+                                        "size_mb": len(content) / 1024 / 1024
+                                    }, ensure_ascii=False))
+                                    download_errors += 1
+                                    break
+                                
                                 with open(local_path, "wb") as f:
-                                    f.write(r.content)
+                                    f.write(content)
                                 local_paths.append(local_path)
                                 last_exc = None
                                 break
@@ -248,21 +281,19 @@ async def seedream_callback(req: Request):
                             }, ensure_ascii=False))
 
                 if download_errors == len(result_urls):
-                    # Все загрузки провалились
                     await _clear_wait_and_reset(bot, user.chat_id, back_to="auto")
                     await safe_send_text(bot, user.chat_id, "⚠️ Ошибка загрузки результатов.\nНапишите в поддержку: @guard_gpt")
                     await s.execute(update(Task).where(Task.id == task.id).values(delivered=True))
                     await s.commit()
                     return JSONResponse({"ok": True})
 
-                # ✅ Отправка результатов
                 await send_generation_result(
                     user.chat_id, 
                     task_id, 
                     task.prompt, 
-                    result_urls,  # Список URL
-                    local_paths,  # Список файлов
-                    seed,  # seed для "Сгенерировать похожее"
+                    result_urls,
+                    local_paths,
+                    seed,
                     bot
                 )
                 

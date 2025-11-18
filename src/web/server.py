@@ -14,7 +14,7 @@ from core.logging import configure_json_logging
 from bot.middlewares import ErrorLoggingMiddleware, RateLimitMiddleware
 from bot.routers import voice as r_voice
 from bot.routers import broadcast as r_broadcast
-from bot.routers import settings as r_settings
+# from bot.routers import settings as r_settings
 from bot.routers import generation as r_generation
 from bot.routers import payments as r_payments
 from bot.routers import commands as r_cmd
@@ -39,13 +39,12 @@ redis_fsm = redis.from_url(
 storage = RedisStorage(redis=redis_fsm, key_builder=DefaultKeyBuilder(with_bot_id=True))
 dp = Dispatcher(storage=storage)
 
-# ✅ ПРАВИЛЬНЫЙ ПОРЯДОК: от специфичных к общим
-dp.include_router(r_cmd.router)  
+dp.include_router(r_generation.router)  
 dp.include_router(r_voice.router)
 dp.include_router(r_broadcast.router)
-dp.include_router(r_settings.router)
+# dp.include_router(r_settings.router)
 dp.include_router(r_payments.router)
-dp.include_router(r_generation.router)
+dp.include_router(r_cmd.router)
 
 
 # Middlewares

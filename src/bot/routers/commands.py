@@ -22,7 +22,6 @@
 # from db.engine import SessionLocal
 # from db.models import User
 # from services.queue import enqueue_generation
-# from bot.routers.generation import cmd_gen
 
 # router = Router()
 
@@ -33,16 +32,17 @@
 # # ======================= /start =======================
 
 # @router.message(Command("start"))
-# async def cmd_start(m: Message):
+# async def cmd_start(m: Message, state: FSMContext):
+#     await state.clear()
 #     await ensure_user(m.from_user)
 #     img_path = get_asset_path("seedream.jpg")
 
 #     caption = (
-#         "🌟 <b>Добро пожаловать в Seedream V4</b> — мощная генерация изображений от ByteDance:\n\n"
+#         "🌟 <b>Добро пожаловать в Seedream V4</b> — мощная генерация изображений:\n\n"
 #         "🎁 У вас есть <b>5 бесплатных генераций</b>\n\n"
 #         "💰 Тариф: <b>1 генерация</b> = <b>1 изображение</b>\n\n"
-#         "Рекомендуем изучить инструкцию!\n"
-#         "📖 <a href=\"https://t.me/seedream_examples\">Инструкция и примеры</a>\n\n"
+#         # "Рекомендуем изучить инструкцию!\n"
+#         # "📖 <a href=\"https://t.me/seedream_examples\">Инструкция и примеры</a>\n\n"
 #         "⚙️ Настройки: /set\n\n"
 #         "Используйте команды из меню или нажмите кнопку ниже 👇\n\n"
 #         "Пользуясь ботом, Вы принимаете наше "
@@ -67,14 +67,15 @@
 # # ======================= /help =======================
 
 # @router.message(Command("help"))
-# async def cmd_help(m: Message):
+# async def cmd_help(m: Message, state: FSMContext):
+#     await state.clear()
 #     text = (
 #         "❓ <b>Помощь</b>\n\n"
 #         "Вот что я умею:\n\n"
 #         "🚀 <b>/start</b> — запуск и краткое введение\n"
 #         "📸 <b>/edit</b> — загрузите фото + запрос → редактирование изображения\n"
 #         "✨ <b>/create</b> — создание изображения по текстовому описанию\n"
-#         "⚙️ <b>/set</b> — настройки качества и количества изображений\n"
+#         # "⚙️ <b>/set</b> — настройки качества и количества изображений\n"
 #         "💳 <b>/buy</b> — баланс и пополнение (₽/⭐)\n"
 #         "🎥 <b>/example</b> — посмотреть примеры работ\n"
 #         "🤖 <b>/bots</b> — другие наши проекты\n"
@@ -106,7 +107,8 @@
 # # ======================= /example =======================
 
 # @router.message(Command("example"))
-# async def cmd_example(m: Message):
+# async def cmd_example(m: Message, state: FSMContext):
+#     await state.clear()
 #     caption = (
 #         "📌 <b>Примеры работ Seedream</b>\n\n"
 #         "Хотите увидеть, как выглядит результат генерации? "
@@ -146,7 +148,8 @@
 # # ======================= /live =======================
 
 # @router.message(Command("live"))
-# async def cmd_live(m: Message):
+# async def cmd_live(m: Message, state: FSMContext):
+#     await state.clear()
 #     text = (
 #         "<b>Рекомендуем эти боты для оживления фото</b>\n\n"
 #         "🖼 <b>Реалистичное оживление фото</b>\n"
@@ -165,7 +168,7 @@
 # async def callback_start_create(c: CallbackQuery, state: FSMContext):
 #     """✅ Кнопка 'Создать изображение' из /start - полный сброс состояния"""
 #     await safe_answer(c)
-#     await state.clear()  # ✅ Полная очистка состояния
+#     await state.clear()
     
 #     async with SessionLocal() as s:
 #         user = (await s.execute(select(User).where(User.chat_id == c.from_user.id))).scalar_one_or_none()
@@ -195,7 +198,7 @@
 # @router.message(Command("create"))
 # async def cmd_create(m: Message, state: FSMContext):
 #     """✅ Полный сброс состояния перед /create"""
-#     await state.clear()  # ✅ Полная очистка
+#     await state.clear()
     
 #     async with SessionLocal() as s:
 #         user = (await s.execute(select(User).where(User.chat_id == m.from_user.id))).scalar_one_or_none()
@@ -244,12 +247,11 @@
     
 #     await safe_edit_text(
 #         c.message, 
-#         f"✅ Выбрано: {ar or 'авто'}\n\n"
-#         f"📊 Настройки:\n"
-#         f"├ Качество: <b>{image_resolution}</b>\n"
-#         f"└ Количество: <b>{max_images}</b> изображений\n\n"
-#         f"💡 Введите промт для генерации\n\n"
-#         # f"<i>Изменить настройки: /set</i>"
+#         # f"✅ Выбрано: {ar or 'авто'}\n\n"
+#         # f"📊 Настройки:\n"
+#         # f"├ Качество: <b>{image_resolution}</b>\n"
+#         # f"└ Количество: <b>{max_images}</b> изображений\n\n"
+#         f"💡 Введите промт для генерации"
 #     )
 
 # @router.message(CreateStates.waiting_prompt, F.text, lambda m: not m.text.startswith("/"))
@@ -286,63 +288,15 @@
 #         seed=None
 #     )
 
-
 # # ======================= Итеративное редактирование Create =======================
 
-# @router.message(CreateStates.final_menu, F.text)
-# async def handle_create_edit(m: Message, state: FSMContext) -> None:
-#     """Правки в режиме create"""
-#     if not m.text:
-#         await safe_send_text(m.bot, m.chat.id, "Напишите текстом, что изменить.")
-#         return
-    
-#     new_prompt = m.text.strip()
-    
-#     if new_prompt.startswith("/"):
-#         return
-    
-#     if len(new_prompt) < 3:
-#         await safe_send_text(m.bot, m.chat.id, "Минимум 3 символа.")
-#         return
-#     if len(new_prompt) > 2000:
-#         new_prompt = new_prompt[:2000]
-    
-#     data = await state.get_data()
-#     last_result_urls = data.get("last_result_urls", [])
-    
-#     if not last_result_urls:
-#         await safe_send_text(m.bot, m.chat.id, "⚠️ Ошибка. Начните заново: /create")
-#         return
-    
-#     aspect_ratio = data.get("aspect_ratio")
-#     image_resolution = data.get("image_resolution", "1K")
-#     max_images = data.get("max_images", 1)
-#     seed = data.get("last_seed")
-    
-#     await state.set_state(CreateStates.generating)
-#     wait_msg = await safe_send_text(m.bot, m.chat.id, f"Генерирую...")
-    
-#     await state.update_data(
-#         mode="create_edit",
-#         prompt=new_prompt,
-#         wait_msg_id=getattr(wait_msg, "message_id", None),
-#     )
-    
-#     await enqueue_generation(
-#         m.from_user.id, 
-#         new_prompt,
-#         last_result_urls,
-#         aspect_ratio=aspect_ratio,
-#         image_resolution=image_resolution,
-#         max_images=max_images,
-#         seed=seed
-#     )
+
 
 # @router.callback_query(CreateStates.final_menu, F.data == "new_image")
 # async def create_new_image(c: CallbackQuery, state: FSMContext) -> None:
 #     """✅ Полный сброс состояния"""
 #     await safe_answer(c)
-#     await state.clear()  # ✅ Полная очистка
+#     await state.clear()
 #     await cmd_create(c.message, state)
 
 # @router.callback_query(CreateStates.final_menu, F.data == "regenerate")
@@ -375,6 +329,103 @@
 #         )
 #     except Exception:
 #         await safe_send_text(c.bot, c.message.chat.id, "⚠️ Ошибка. Напишите @guard_gpt")
+        
+# # ======================= CREATE FINAL MENU =======================
+
+# @router.callback_query(CreateStates.final_menu, F.data == "new_image")
+# async def create_new_image(c: CallbackQuery, state: FSMContext):
+#     """Начать заново в режиме create"""
+#     await safe_answer(c)
+#     await state.clear()
+#     await cmd_create(c.message, state)
+
+# # @router.callback_query(CreateStates.final_menu, F.data == "regenerate")
+# # async def create_regenerate(c: CallbackQuery, state: FSMContext):
+# #     """Сгенерировать похожее в режиме create"""
+# #     await safe_answer(c)
+    
+# #     data = await state.get_data()
+# #     prompt = data.get("prompt")
+# #     seed = data.get("last_seed")
+# #     aspect_ratio = data.get("aspect_ratio", "9:16")
+    
+# #     if not prompt:
+# #         await safe_send_text(c.bot, c.message.chat.id, "⚠️ Произошла ошибка.\nНапишите в поддержку: @guard_gpt")
+# #         return
+    
+# #     async with SessionLocal() as s:
+# #         user = (await s.execute(select(User).where(User.chat_id == c.from_user.id))).scalar_one()
+# #         image_resolution = user.image_resolution
+# #         max_images = user.max_images
+    
+# #     try:
+# #         await safe_send_text(c.bot, c.message.chat.id, "Генерирую…")
+# #         await enqueue_generation(
+# #             c.from_user.id, 
+# #             prompt, 
+# #             [],
+# #             aspect_ratio=aspect_ratio,
+# #             image_resolution=image_resolution,
+# #             max_images=max_images,
+# #             seed=seed
+# #         )
+# #     except Exception:
+# #         await safe_send_text(c.bot, c.message.chat.id, "⚠️ Произошла ошибка.\nНапишите в поддержку: @guard_gpt")
+
+# @router.message(CreateStates.final_menu, F.text.startswith("/"))
+# async def create_final_menu_commands(m: Message, state: FSMContext):
+#     """Команды в final_menu режима create"""
+#     cmd = (m.text or "").split(maxsplit=1)[0].lower()
+
+#     if cmd in ["/start", "/help", "/buy", "/balance"]:
+#         return
+    
+#     if cmd in ["/edit", "/gen", "/create"]:
+#         await safe_send_text(
+#             m.bot, m.chat.id,
+#             "💡 Вы уже в режиме создания.\n\n"
+#             "Просто напишите новый промт, или нажмите кнопку внизу."
+#         )
+#         return
+
+# @router.message(CreateStates.final_menu, F.text)
+# async def create_final_menu_new_prompt(m: Message, state: FSMContext):
+#     """Новый промт в режиме create"""
+#     prompt = (m.text or "").strip()
+    
+#     if len(prompt) < 3:
+#         await safe_send_text(m.bot, m.chat.id, "Промт слишком короткий. Минимум 3 символа 🙂")
+#         return
+#     if len(prompt) > 2000:
+#         prompt = prompt[:2000]
+    
+#     data = await state.get_data()
+#     aspect_ratio = data.get("aspect_ratio", "9:16")
+    
+#     async with SessionLocal() as s:
+#         user = (await s.execute(select(User).where(User.chat_id == m.from_user.id))).scalar_one()
+#         image_resolution = user.image_resolution
+#         max_images = user.max_images
+    
+#     await state.set_state(CreateStates.generating)
+#     wait_msg = await safe_send_text(m.bot, m.chat.id, "Генерирую…")
+#     await state.update_data(
+#         mode="create",
+#         prompt=prompt,
+#         wait_msg_id=getattr(wait_msg, "message_id", None),
+#         image_resolution=image_resolution,
+#         max_images=max_images,
+#         aspect_ratio=aspect_ratio,
+#     )
+    
+#     await enqueue_generation(
+#         m.from_user.id, 
+#         prompt, 
+#         [],
+#         aspect_ratio=aspect_ratio,
+#         image_resolution=image_resolution,
+#         max_images=max_images
+#     )
 
 from __future__ import annotations
 
@@ -416,12 +467,9 @@ async def cmd_start(m: Message, state: FSMContext):
     img_path = get_asset_path("seedream.jpg")
 
     caption = (
-        "🌟 <b>Добро пожаловать в Seedream V4</b> — мощная генерация изображений от ByteDance:\n\n"
+        "🌟 <b>Добро пожаловать в Seedream V4</b> — мощная генерация изображений:\n\n"
         "🎁 У вас есть <b>5 бесплатных генераций</b>\n\n"
         "💰 Тариф: <b>1 генерация</b> = <b>1 изображение</b>\n\n"
-        "Рекомендуем изучить инструкцию!\n"
-        "📖 <a href=\"https://t.me/seedream_examples\">Инструкция и примеры</a>\n\n"
-        "⚙️ Настройки: /set\n\n"
         "Используйте команды из меню или нажмите кнопку ниже 👇\n\n"
         "Пользуясь ботом, Вы принимаете наше "
         "<a href=\"https://docs.google.com/document/d/139A-rEgNeA6CrcOaOsOergVVx4bUq8NFlTLx4eD4MfE/edit?usp=drivesdk\">пользовательское соглашение</a> "
@@ -453,7 +501,6 @@ async def cmd_help(m: Message, state: FSMContext):
         "🚀 <b>/start</b> — запуск и краткое введение\n"
         "📸 <b>/edit</b> — загрузите фото + запрос → редактирование изображения\n"
         "✨ <b>/create</b> — создание изображения по текстовому описанию\n"
-        "⚙️ <b>/set</b> — настройки качества и количества изображений\n"
         "💳 <b>/buy</b> — баланс и пополнение (₽/⭐)\n"
         "🎥 <b>/example</b> — посмотреть примеры работ\n"
         "🤖 <b>/bots</b> — другие наши проекты\n"
@@ -544,7 +591,7 @@ async def cmd_live(m: Message, state: FSMContext):
 
 @router.callback_query(F.data == "start_create")
 async def callback_start_create(c: CallbackQuery, state: FSMContext):
-    """✅ Кнопка 'Создать изображение' из /start - полный сброс состояния"""
+    """✅ Кнопка 'Создать изображение' из /start"""
     await safe_answer(c)
     await state.clear()
     
@@ -625,10 +672,6 @@ async def handle_create_aspect_ratio(c: CallbackQuery, state: FSMContext):
     
     await safe_edit_text(
         c.message, 
-        f"✅ Выбрано: {ar or 'авто'}\n\n"
-        f"📊 Настройки:\n"
-        f"├ Качество: <b>{image_resolution}</b>\n"
-        f"└ Количество: <b>{max_images}</b> изображений\n\n"
         f"💡 Введите промт для генерации"
     )
 
@@ -645,7 +688,7 @@ async def create_got_prompt(m: Message, state: FSMContext) -> None:
         
     data = await state.get_data()
     aspect_ratio = data.get("aspect_ratio")
-    image_resolution = data.get("image_resolution", "1K")
+    image_resolution = data.get("image_resolution", "4K")
     max_images = data.get("max_images", 1)
 
     await state.set_state(CreateStates.generating)
@@ -666,88 +709,99 @@ async def create_got_prompt(m: Message, state: FSMContext) -> None:
         seed=None
     )
 
-# ======================= Итеративное редактирование Create =======================
-
-@router.message(CreateStates.final_menu, F.text, lambda m: not m.text.startswith("/"))
-async def handle_create_edit(m: Message, state: FSMContext) -> None:
-    """Правки в режиме create"""
-    if not m.text:
-        await safe_send_text(m.bot, m.chat.id, "Напишите текстом, что изменить.")
-        return
-    
-    new_prompt = m.text.strip()
-    
-    if len(new_prompt) < 3:
-        await safe_send_text(m.bot, m.chat.id, "Минимум 3 символа.")
-        return
-    if len(new_prompt) > 2000:
-        new_prompt = new_prompt[:2000]
-    
-    data = await state.get_data()
-    last_result_urls = data.get("last_result_urls", [])
-    
-    if not last_result_urls:
-        await safe_send_text(m.bot, m.chat.id, "⚠️ Ошибка. Начните заново: /create")
-        return
-    
-    aspect_ratio = data.get("aspect_ratio")
-    image_resolution = data.get("image_resolution", "1K")
-    max_images = data.get("max_images", 1)
-    seed = data.get("last_seed")
-    
-    await state.set_state(CreateStates.generating)
-    wait_msg = await safe_send_text(m.bot, m.chat.id, f"Генерирую...")
-    
-    await state.update_data(
-        mode="create_edit",
-        prompt=new_prompt,
-        wait_msg_id=getattr(wait_msg, "message_id", None),
-    )
-    
-    await enqueue_generation(
-        m.from_user.id, 
-        new_prompt,
-        last_result_urls,
-        aspect_ratio=aspect_ratio,
-        image_resolution=image_resolution,
-        max_images=max_images,
-        seed=seed
-    )
+# ======================= CREATE FINAL MENU =======================
 
 @router.callback_query(CreateStates.final_menu, F.data == "new_image")
-async def create_new_image(c: CallbackQuery, state: FSMContext) -> None:
-    """✅ Полный сброс состояния"""
+async def create_new_image(c: CallbackQuery, state: FSMContext):
+    """✅ Начать заново в режиме create"""
     await safe_answer(c)
     await state.clear()
     await cmd_create(c.message, state)
 
 @router.callback_query(CreateStates.final_menu, F.data == "regenerate")
-async def create_regenerate(c: CallbackQuery, state: FSMContext) -> None:
-    """Сгенерировать похожее с seed"""
+async def create_regenerate(c: CallbackQuery, state: FSMContext):
+    """✅ Сгенерировать похожее в режиме create"""
     await safe_answer(c)
+    
     data = await state.get_data()
-    last_result_urls = data.get("last_result_urls", [])
     prompt = data.get("prompt")
-    aspect_ratio = data.get("aspect_ratio")
-    image_resolution = data.get("image_resolution", "1K")
-    max_images = data.get("max_images", 1)
     seed = data.get("last_seed")
+    aspect_ratio = data.get("aspect_ratio", "9:16")
     
     if not prompt:
-        await safe_send_text(c.bot, c.message.chat.id, "⚠️ Ошибка. Напишите @guard_gpt")
+        await safe_send_text(c.bot, c.message.chat.id, "⚠️ Произошла ошибка.\nНапишите в поддержку: @guard_gpt")
         return
     
+    async with SessionLocal() as s:
+        user = (await s.execute(select(User).where(User.chat_id == c.from_user.id))).scalar_one()
+        image_resolution = user.image_resolution
+        max_images = user.max_images
+    
     try:
-        await safe_send_text(c.bot, c.message.chat.id, f"Генерирую...")
-        
+        await safe_send_text(c.bot, c.message.chat.id, "Генерирую…")
         await enqueue_generation(
             c.from_user.id, 
             prompt, 
-            last_result_urls if last_result_urls else [],
+            [],
             aspect_ratio=aspect_ratio,
             image_resolution=image_resolution,
             max_images=max_images,
             seed=seed
         )
     except Exception:
-        await safe_send_text(c.bot, c.message.chat.id, "⚠️ Ошибка. Напишите @guard_gpt")
+        await safe_send_text(c.bot, c.message.chat.id, "⚠️ Произошла ошибка.\nНапишите в поддержку: @guard_gpt")
+
+@router.message(CreateStates.final_menu, F.text.startswith("/"))
+async def create_final_menu_commands(m: Message, state: FSMContext):
+    """Команды в final_menu режима create"""
+    cmd = (m.text or "").split(maxsplit=1)[0].lower()
+
+    if cmd in ["/start", "/help", "/buy", "/balance"]:
+        return
+    
+    if cmd in ["/edit", "/gen", "/create"]:
+        await safe_send_text(
+            m.bot, m.chat.id,
+            "💡 Вы уже в режиме создания.\n\n"
+            "Просто напишите новый промт, или нажмите кнопку внизу."
+        )
+        return
+
+@router.message(CreateStates.final_menu, F.text)
+async def create_final_menu_new_prompt(m: Message, state: FSMContext):
+    """Новый промт в режиме create"""
+    prompt = (m.text or "").strip()
+    
+    if len(prompt) < 3:
+        await safe_send_text(m.bot, m.chat.id, "Промт слишком короткий. Минимум 3 символа 🙂")
+        return
+    if len(prompt) > 2000:
+        prompt = prompt[:2000]
+    
+    data = await state.get_data()
+    aspect_ratio = data.get("aspect_ratio", "9:16")
+    
+    async with SessionLocal() as s:
+        user = (await s.execute(select(User).where(User.chat_id == m.from_user.id))).scalar_one()
+        image_resolution = user.image_resolution
+        max_images = user.max_images
+    
+    await state.set_state(CreateStates.generating)
+    wait_msg = await safe_send_text(m.bot, m.chat.id, "Генерирую…")
+    await state.update_data(
+        mode="create",
+        prompt=prompt,
+        wait_msg_id=getattr(wait_msg, "message_id", None),
+        image_resolution=image_resolution,
+        max_images=max_images,
+        aspect_ratio=aspect_ratio,
+    )
+    
+    await enqueue_generation(
+        m.from_user.id, 
+        prompt, 
+        [],
+        aspect_ratio=aspect_ratio,
+        image_resolution=image_resolution,
+        max_images=max_images
+    )

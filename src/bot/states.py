@@ -7,11 +7,11 @@ class TopupStates(StatesGroup):
     waiting_email = State()
 
 class GenStates(StatesGroup):
+    selecting_orientation = State()  # 🆕 Новое состояние
     uploading_images = State()
     waiting_prompt = State()
     generating = State()
     final_menu = State()
-    selecting_aspect_ratio = State()
 
 class CreateStates(StatesGroup):
     waiting_prompt = State()

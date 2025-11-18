@@ -20,7 +20,7 @@ from db.engine import SessionLocal
 from db.models import User
 from services.pricing import CREDITS_PER_GENERATION
 from bot.states import GenStates
-from bot.keyboards import kb_gen_step_back, kb_final_result
+from bot.keyboards import kb_gen_step_back, kb_final_result, kb_edit_orientation_selector
 from services.queue import enqueue_generation
 from services.telegram_safe import (
     safe_answer,
@@ -46,11 +46,84 @@ def resource_path(relative_path: str) -> str:
 
 PLACEHOLDER_PATH = resource_path(os.path.join('..', '..', 'assets', 'placeholder_light_gray_block.png'))
 
+def _j(event: str, **fields) -> str:
+    """JSON логирование"""
+    import json
+    return json.dumps({"event": event, **fields}, ensure_ascii=False)
+
+# 🆕 НОВАЯ ФУНКЦИЯ: Проверка на HEIC
+def _is_heic_format(message: Message) -> bool:
+    """Проверка, является ли файл HEIC форматом (iPhone)"""
+    if not message.document:
+        return False
+    
+    mime = (message.document.mime_type or "").lower()
+    name = (message.document.file_name or "").lower()
+    
+    # HEIC форматы
+    if "heic" in mime or "heif" in mime:
+        return True
+    if name.endswith(".heic") or name.endswith(".heif"):
+        return True
+    
+    return False
+
+# 🆕 ОБНОВЛЁННАЯ ФУНКЦИЯ: Проверка на изображение
+def _is_image_document(m: Message) -> bool:
+    """Проверка, является ли документ изображением (поддерживаемым форматом)"""
+    if not m.document:
+        return False
+    
+    # 🆕 Сначала проверяем HEIC - НЕ поддерживается
+    if _is_heic_format(m):
+        return False
+    
+    mt = (m.document.mime_type or "").lower()
+    
+    # Поддерживаемые MIME типы
+    if mt.startswith("image/"):
+        # Telegram API не поддерживает HEIC, но на всякий случай
+        if "heic" not in mt and "heif" not in mt:
+            return True
+    
+    # Проверка по расширению файла
+    name = (m.document.file_name or "").lower()
+    supported_extensions = (".png", ".jpg", ".jpeg", ".webp")
+    
+    for ext in supported_extensions:
+        if name.endswith(ext):
+            return True
+    
+    return False
+
 @router.message(F.photo | F.document)
 async def auto_start_on_photo(m: Message, state: FSMContext):
-    """✅ Автоматический старт /edit при получении фото"""
+    """✅ Автоматический старт /edit при получении фото с проверкой HEIC"""
+    # 🆕 ЛОГИРОВАНИЕ
+    cur = await state.get_state()
+    log.info(_j("auto_start.triggered", chat_id=m.from_user.id, state=cur, has_photo=bool(m.photo), has_doc=bool(m.document)))
+    
     caption = (m.caption or "").strip().lower()
     if caption.startswith("/broadcast"):
+        return
+    
+    # 🆕 ПРОВЕРКА НА HEIC ФОРМАТ
+    if m.document and _is_heic_format(m):
+        await safe_send_text(
+            m.bot, m.chat.id,
+            "❌ <b>HEIC формат не поддерживается</b>\n\n"
+            "📱 Это фото с iPhone в формате HEIC/HEIF.\n\n"
+            "🔧 <b>Как исправить:</b>\n\n"
+            "<b>Способ 1 (Быстро):</b>\n"
+            "1️⃣ Откройте фото в iPhone\n"
+            "2️⃣ Нажмите «Поделиться» → Telegram\n"
+            "3️⃣ Отправьте как <b>ФОТО</b> (не файл)\n\n"
+            "<b>Способ 2 (Настройки):</b>\n"
+            "1️⃣ Настройки → Камера → Форматы\n"
+            "2️⃣ Выберите «Наиболее совместимые» (JPEG)\n"
+            "3️⃣ Сделайте новое фото\n\n"
+            "💡 <b>Поддерживаемые форматы:</b> JPG, PNG, WebP"
+        )
         return
     
     is_image = False
@@ -60,6 +133,13 @@ async def auto_start_on_photo(m: Message, state: FSMContext):
         is_image = True
     
     if not is_image:
+        # 🆕 Если это документ, но НЕ изображение - показываем подсказку
+        if m.document:
+            await safe_send_text(
+                m.bot, m.chat.id,
+                "⚠️ Этот формат не поддерживается.\n\n"
+                "💡 Отправьте изображение в формате: JPG, PNG или WebP"
+            )
         return
     
     cur = await state.get_state()
@@ -89,55 +169,8 @@ async def auto_start_on_photo(m: Message, state: FSMContext):
         elif _is_image_document(m):
             await handle_document_images(m, state)
 
-# async def _kick_generation_now(m: Message, state: FSMContext, prompt: str) -> None:
-#     """Запускает генерацию сразу"""
-#     prompt = (prompt or "").strip()
-#     if len(prompt) < 3:
-#         await state.set_state(GenStates.waiting_prompt)
-#         await safe_send_text(m.bot, m.chat.id, "Введите промт (что изменить):", reply_markup=kb_gen_step_back())
-#         return
-
-#     data = await state.get_data()
-#     photos = data.get("photos", [])
-    
-#     if not photos:
-#         await state.set_state(GenStates.waiting_prompt)
-#         await safe_send_text(m.bot, m.chat.id, "Введите промт (что изменить):", reply_markup=kb_gen_step_back())
-#         return
-
-#     async with SessionLocal() as s:
-#         user = (await s.execute(select(User).where(User.chat_id == m.from_user.id))).scalar_one()
-#         image_resolution = user.image_resolution
-#         max_images = user.max_images
-
-#     vertical = data.get("vertical_orientation", True)
-#     aspect_ratio = "9:16" if vertical else "16:9"  # ← Определяем AR
-
-#     file_ids = [p["file_id"] for p in photos]
-#     await state.set_state(GenStates.generating)
-#     wait_msg = await safe_send_text(m.bot, m.chat.id, f"Генерирую...")
-#     await state.update_data(
-#         prompt=prompt,
-#         base_prompt=prompt,
-#         edits=[],
-#         mode="edit",
-#         wait_msg_id=getattr(wait_msg, "message_id", None),
-#         image_resolution=image_resolution,
-#         max_images=max_images,
-#         aspect_ratio=aspect_ratio,  # ← Добавляем
-#     )
-
-#     await enqueue_generation(
-#         m.from_user.id, 
-#         prompt, 
-#         file_ids,
-#         image_resolution=image_resolution,
-#         max_images=max_images,
-#         aspect_ratio=aspect_ratio  # ← Передаем
-#     )
-
 async def _kick_generation_now(m: Message, state: FSMContext, prompt: str) -> None:
-    """Запускает генерацию сразу"""
+    """Запускает генерацию сразу (с дефолтной ориентацией 9:16)"""
     prompt = (prompt or "").strip()
     if len(prompt) < 3:
         await state.set_state(GenStates.waiting_prompt)
@@ -157,6 +190,9 @@ async def _kick_generation_now(m: Message, state: FSMContext, prompt: str) -> No
         image_resolution = user.image_resolution
         max_images = user.max_images
 
+    # 🆕 Дефолтная ориентация при авто-генерации
+    aspect_ratio = "9:16"
+    
     file_ids = [p["file_id"] for p in photos]
     await state.set_state(GenStates.generating)
     wait_msg = await safe_send_text(m.bot, m.chat.id, f"Генерирую...")
@@ -168,40 +204,18 @@ async def _kick_generation_now(m: Message, state: FSMContext, prompt: str) -> No
         wait_msg_id=getattr(wait_msg, "message_id", None),
         image_resolution=image_resolution,
         max_images=max_images,
+        aspect_ratio=aspect_ratio,
     )
 
     await enqueue_generation(
         m.from_user.id, 
         prompt, 
         file_ids,
+        aspect_ratio=aspect_ratio,
         image_resolution=image_resolution,
         max_images=max_images
-        # ← aspect_ratio НЕ передаем - Kling сам определит по исходному изображению
     )
-# @router.callback_query(GenStates.waiting_prompt, F.data.startswith("toggle_orientation_"))
-# async def toggle_orientation(c: CallbackQuery, state: FSMContext) -> None:
-#     """Переключение вертикально/горизонтально"""
-#     await safe_answer(c)
-    
-#     current = c.data.split("_")[-1] == "True"
-#     new_vertical = not current
-    
-#     await state.update_data(vertical_orientation=new_vertical)
-    
-#     checkbox = "✅" if new_vertical else "☑️"
-#     text = f"{checkbox} Вертикально" if new_vertical else f"{checkbox} Горизонтально"
-    
-#     new_keyboard = InlineKeyboardMarkup(
-#         inline_keyboard=[
-#             [InlineKeyboardButton(text=text, callback_data=f"toggle_orientation_{new_vertical}")]
-#         ]
-#     )
-    
-#     try:
-#         await c.message.edit_reply_markup(reply_markup=new_keyboard)
-#     except Exception:
-#         pass
-    
+
 @router.message(Command("edit"))
 @router.message(Command("gen"))
 async def cmd_gen(m: Message, state: FSMContext, user_id: Optional[int] = None, show_intro: bool = True):
@@ -258,47 +272,13 @@ async def start_generation(m: Message, state: FSMContext, show_intro: bool = Tru
         else:
             await safe_send_text(m.bot, m.chat.id, text)
 
-def _is_image_document(msg: Message) -> bool:
-    if not msg.document:
-        return False
-    mt = (msg.document.mime_type or "").lower()
-    if mt.startswith("image/"):
-        return True
-    name = (msg.document.file_name or "").lower()
-    for ext in (".png", ".jpg", ".jpeg", ".webp"):
-        if name.endswith(ext):
-            return True
-    return False
-
 def _cancel_debounce(chat_id: int) -> None:
     task = _DEBOUNCE_TASKS.pop(chat_id, None)
     if task and not task.done():
         task.cancel()
 
-# async def _finalize_to_prompt(m: Message, state: FSMContext) -> None:
-#     """Финализация загрузки фото и переход к вводу промта"""
-#     _cancel_debounce(m.chat.id)
-
-#     data = await state.get_data()
-#     if data.get("finalized"):
-#         return
-
-#     photos: List[Dict[str, str]] = data.get("photos", [])
-#     if not photos:
-#         return
-
-#     await state.update_data(finalized=True, vertical_orientation=True)  # ← По умолчанию вертикально
-
-#     auto_prompt = (data.get("auto_prompt") or "").strip()
-#     if auto_prompt:
-#         await state.update_data(auto_prompt=None)
-#         return await _kick_generation_now(m, state, auto_prompt)
-
-#     await state.set_state(GenStates.waiting_prompt)
-#     await safe_send_text(m.bot, m.chat.id, "Введите промт (что изменить):", reply_markup=kb_gen_step_back(vertical=True))
-
 async def _finalize_to_prompt(m: Message, state: FSMContext) -> None:
-    """Финализация загрузки фото и переход к вводу промта"""
+    """Финализация загрузки фото и выбор ориентации"""
     _cancel_debounce(m.chat.id)
 
     data = await state.get_data()
@@ -309,16 +289,44 @@ async def _finalize_to_prompt(m: Message, state: FSMContext) -> None:
     if not photos:
         return
 
-    await state.update_data(finalized=True)  # ← Убрали vertical_orientation=True
+    await state.update_data(finalized=True)
 
     auto_prompt = (data.get("auto_prompt") or "").strip()
     if auto_prompt:
-        await state.update_data(auto_prompt=None)
+        # Если есть авто-промт из caption - ставим дефолт 9:16 и генерируем
+        await state.update_data(auto_prompt=None, aspect_ratio="9:16")
         return await _kick_generation_now(m, state, auto_prompt)
 
-    await state.set_state(GenStates.waiting_prompt)
-    await safe_send_text(m.bot, m.chat.id, "Введите промт (что изменить):", reply_markup=kb_gen_step_back())  # ← Убрали параметр vertical
+    # 🆕 Спрашиваем ориентацию
+    await state.set_state(GenStates.selecting_orientation)
+    await safe_send_text(
+        m.bot, m.chat.id,
+        "Выберите ориентацию результата:",
+        reply_markup=kb_edit_orientation_selector(current="9:16")
+    )
+
+# 🆕 НОВЫЙ ОБРАБОТЧИК выбора ориентации для /edit
+@router.callback_query(GenStates.selecting_orientation, F.data.startswith("edit_or_"))
+async def handle_edit_orientation(c: CallbackQuery, state: FSMContext):
+    """Обработка выбора ориентации в режиме /edit"""
+    await safe_answer(c)
+    ar = c.data.replace("edit_or_", "")
     
+    if ar not in ["9:16", "16:9"]:
+        return
+    
+    await state.update_data(aspect_ratio=ar)
+    await state.set_state(GenStates.waiting_prompt)
+    
+    orientation_text = "📱 Вертикальная (9:16)" if ar == "9:16" else "🖼 Горизонтальная (16:9)"
+    
+    await safe_edit_text(
+        c.message,
+        f"✅ Выбрано: {orientation_text}\n\n"
+        f"💡 Теперь введите промт (что нужно изменить на фото):",
+        reply_markup=kb_gen_step_back()
+    )
+
 def _schedule_album_finalize(m: Message, state: FSMContext, delay: float = 2.0):
     """Планирование финализации после загрузки альбома"""
     async def _debounce():
@@ -385,10 +393,35 @@ async def handle_images(m: Message, state: FSMContext) -> None:
 
 @router.message(GenStates.uploading_images, F.document)
 async def handle_document_images(m: Message, state: FSMContext) -> None:
+    """Обработка документов с проверкой на HEIC"""
     try:
-        if not _is_image_document(m):
-            await safe_send_text(m.bot, m.chat.id, "Можно прикрепить только изображения. Поддержка: PNG, JPG, WEBP.")
+        # 🆕 Проверка на HEIC формат
+        if _is_heic_format(m):
+            await safe_send_text(
+                m.bot, m.chat.id,
+                "❌ <b>HEIC формат не поддерживается</b>\n\n"
+                "📱 Это фото с iPhone в формате HEIC/HEIF.\n\n"
+                "🔧 <b>Как исправить:</b>\n\n"
+                "<b>Способ 1 (Быстро):</b>\n"
+                "1️⃣ Откройте фото в iPhone\n"
+                "2️⃣ Нажмите «Поделиться» → Telegram\n"
+                "3️⃣ Отправьте как <b>ФОТО</b> (не файл)\n\n"
+                "<b>Способ 2 (Настройки):</b>\n"
+                "1️⃣ Настройки → Камера → Форматы\n"
+                "2️⃣ Выберите «Наиболее совместимые» (JPEG)\n"
+                "3️⃣ Сделайте новое фото\n\n"
+                "💡 <b>Поддерживаемые форматы:</b> JPG, PNG, WebP"
+            )
             return
+        
+        if not _is_image_document(m):
+            await safe_send_text(
+                m.bot, m.chat.id, 
+                "⚠️ Можно прикрепить только изображения.\n\n"
+                "💡 Поддерживаемые форматы: PNG, JPG, JPEG, WebP"
+            )
+            return
+        
         if (m.caption or "").strip():
             await state.update_data(auto_prompt=(m.caption or "").strip())
         await _accept_photo(m, state, {"type": "document", "file_id": m.document.file_id})
@@ -399,65 +432,41 @@ async def handle_document_images(m: Message, state: FSMContext) -> None:
 async def handle_text_while_upload(m: Message, state: FSMContext) -> None:
     await safe_send_text(m.bot, m.chat.id, "Пришлите 1-6 фотографий которые нужно изменить или объединить")
 
-@router.callback_query(GenStates.waiting_prompt, F.data == "back_to_images")
+@router.callback_query(F.data == "back_to_images")
 async def back_to_images(c: CallbackQuery, state: FSMContext) -> None:
+    """Возврат к загрузке фото"""
     await safe_answer(c)
     _cancel_debounce(c.message.chat.id)
     await state.set_state(GenStates.uploading_images)
-    await state.update_data(photos=[], album_id=None, finalized=False)
+    await state.update_data(photos=[], album_id=None, finalized=False, aspect_ratio=None)
     await safe_edit_text(c.message, "Пришлите 1-6 фотографий которые нужно изменить или объединить")
 
-# @router.message(GenStates.waiting_prompt, F.text, lambda m: not m.text.startswith("/"))
-# async def got_user_prompt(m: Message, state: FSMContext) -> None:
-#     prompt = m.text.strip()
-#     if not prompt:
-#         await safe_send_text(m.bot, m.chat.id, "Введите промт (что изменить):")
-#         return
-#     if len(prompt) < 3:
-#         await safe_send_text(m.bot, m.chat.id, "Промт слишком короткий. Опишите задачу минимум в 3 символах 🙂")
-#         return
-#     if len(prompt) > 2000:
-#         prompt = prompt[:2000]
-
-#     data = await state.get_data()
-#     photos: List[Dict[str, str]] = data.get("photos", [])
-#     file_ids = [p["file_id"] for p in photos]
+@router.message(GenStates.selecting_orientation, F.text, lambda m: not m.text.startswith("/"))
+async def handle_text_instead_of_orientation(m: Message, state: FSMContext):
+    """Если пользователь написал промт вместо выбора ориентации - дефолт 9:16"""
+    prompt = m.text.strip()
     
-#     vertical = data.get("vertical_orientation", True)
-#     aspect_ratio = "9:16" if vertical else "16:9"  # ← Определяем AR
-
-#     async with SessionLocal() as s:
-#         user = (await s.execute(select(User).where(User.chat_id == m.from_user.id))).scalar_one()
-#         image_resolution = user.image_resolution
-#         max_images = user.max_images
-
-#     await state.set_state(GenStates.generating)
-#     try:
-#         wait_msg = await safe_send_text(m.bot, m.chat.id, f"Генерирую...")
-#         await state.update_data(
-#             prompt=prompt,
-#             base_prompt=prompt,
-#             edits=[],
-#             mode="edit",
-#             wait_msg_id=getattr(wait_msg, "message_id", None),
-#             image_resolution=image_resolution,
-#             max_images=max_images,
-#             aspect_ratio=aspect_ratio,  # ← Добавляем
-#         )
-
-#         await enqueue_generation(
-#             m.from_user.id, 
-#             prompt, 
-#             file_ids,
-#             image_resolution=image_resolution,
-#             max_images=max_images,
-#             aspect_ratio=aspect_ratio  # ← Передаем
-#         )
-#     except Exception:
-#         await safe_send_text(m.bot, m.chat.id, "⚠️ Произошла ошибка.\nНапишите в поддержку: @guard_gpt")
-
+    if len(prompt) < 3:
+        await safe_send_text(m.bot, m.chat.id, "Промт слишком короткий. Минимум 3 символа 🙂")
+        return
+    
+    if len(prompt) > 2000:
+        prompt = prompt[:2000]
+    
+    # 🆕 Устанавливаем дефолтную ориентацию 9:16
+    await state.update_data(aspect_ratio="9:16")
+    
+    log.info(_j("edit.skip_orientation", chat_id=m.from_user.id, prompt_len=len(prompt)))
+    
+    # Переходим к состоянию ожидания промта и сразу обрабатываем
+    await state.set_state(GenStates.waiting_prompt)
+    
+    # Вызываем обработчик промта напрямую
+    await got_user_prompt(m, state)
+    
 @router.message(GenStates.waiting_prompt, F.text, lambda m: not m.text.startswith("/"))
 async def got_user_prompt(m: Message, state: FSMContext) -> None:
+    """Получили промт после выбора ориентации"""
     prompt = m.text.strip()
     if not prompt:
         await safe_send_text(m.bot, m.chat.id, "Введите промт (что изменить):")
@@ -471,6 +480,8 @@ async def got_user_prompt(m: Message, state: FSMContext) -> None:
     data = await state.get_data()
     photos: List[Dict[str, str]] = data.get("photos", [])
     file_ids = [p["file_id"] for p in photos]
+    
+    aspect_ratio = data.get("aspect_ratio", "9:16")
 
     async with SessionLocal() as s:
         user = (await s.execute(select(User).where(User.chat_id == m.from_user.id))).scalar_one()
@@ -488,82 +499,23 @@ async def got_user_prompt(m: Message, state: FSMContext) -> None:
             wait_msg_id=getattr(wait_msg, "message_id", None),
             image_resolution=image_resolution,
             max_images=max_images,
+            aspect_ratio=aspect_ratio,
         )
 
         await enqueue_generation(
             m.from_user.id, 
             prompt, 
             file_ids,
+            aspect_ratio=aspect_ratio,
             image_resolution=image_resolution,
             max_images=max_images
-            # ← aspect_ratio НЕ передаем
         )
     except Exception:
         await safe_send_text(m.bot, m.chat.id, "⚠️ Произошла ошибка.\nНапишите в поддержку: @guard_gpt")
-        
-# @router.message(GenStates.final_menu, F.text, lambda m: not m.text.startswith("/"))
-# async def handle_final_menu_message(m: Message, state: FSMContext) -> None:
-#     """✅ Правки после результата в /gen"""
-#     if not m.text:
-#         await safe_send_text(m.bot, m.chat.id, "Напишите текстом, что изменить в результате, и я сгенерирую новую версию.")
-#         return
-
-#     new_change = (m.text or "").strip()
-#     data = await state.get_data()
-#     photos: List[Dict[str, str]] = data.get("photos") or []
-    
-#     if not photos:
-#         await safe_send_text(m.bot, m.chat.id, "Не удалось найти исходные изображения. Нажмите «Начать заново».")
-#         return
-
-#     base_prompt = (data.get("base_prompt") or data.get("prompt") or "").strip()
-#     edits = list(data.get("edits") or [])
-#     if new_change:
-#         edits.append(new_change)
-
-#     cumulative_prompt = " ".join([base_prompt] + edits).strip()
-#     if len(cumulative_prompt) < 3:
-#         await safe_send_text(m.bot, m.chat.id, "Опишите правку чуть подробнее (минимум 3 символа).")
-#         return
-#     if len(cumulative_prompt) > 4000:
-#         cumulative_prompt = cumulative_prompt[:4000]
-
-#     async with SessionLocal() as s:
-#         user = (await s.execute(select(User).where(User.chat_id == m.from_user.id))).scalar_one()
-#         image_resolution = user.image_resolution
-#         max_images = user.max_images
-    
-#     seed = data.get("last_seed")
-#     aspect_ratio = data.get("aspect_ratio")  # ← Сохраняем AR
-
-#     await state.set_state(GenStates.generating)
-#     try:
-#         wait_msg = await safe_send_text(m.bot, m.chat.id, f"Генерирую...")
-#         await state.update_data(
-#             prompt=cumulative_prompt,
-#             edits=edits,
-#             mode="edit",
-#             wait_msg_id=getattr(wait_msg, "message_id", None),
-#             image_resolution=image_resolution,
-#             max_images=max_images,
-#         )
-        
-#         file_ids = [p["file_id"] for p in photos]
-#         await enqueue_generation(
-#             m.from_user.id, 
-#             cumulative_prompt, 
-#             file_ids,
-#             image_resolution=image_resolution,
-#             max_images=max_images,
-#             seed=seed,
-#             aspect_ratio=aspect_ratio  # ← Передаем
-#         )
-#     except Exception:
-#         await safe_send_text(m.bot, m.chat.id, "⚠️ Произошла ошибка.\nНапишите в поддержку: @guard_gpt")
 
 @router.message(GenStates.final_menu, F.text, lambda m: not m.text.startswith("/"))
 async def handle_final_menu_message(m: Message, state: FSMContext) -> None:
-    """✅ Правки после результата в /gen"""
+    """Правки после результата в /gen"""
     if not m.text:
         await safe_send_text(m.bot, m.chat.id, "Напишите текстом, что изменить в результате, и я сгенерирую новую версию.")
         return
@@ -594,6 +546,7 @@ async def handle_final_menu_message(m: Message, state: FSMContext) -> None:
         max_images = user.max_images
     
     seed = data.get("last_seed")
+    aspect_ratio = data.get("aspect_ratio", "9:16")
 
     await state.set_state(GenStates.generating)
     try:
@@ -612,14 +565,14 @@ async def handle_final_menu_message(m: Message, state: FSMContext) -> None:
             m.from_user.id, 
             cumulative_prompt, 
             file_ids,
+            aspect_ratio=aspect_ratio,
             image_resolution=image_resolution,
             max_images=max_images,
             seed=seed
-            # ← aspect_ratio НЕ передаем
         )
     except Exception:
         await safe_send_text(m.bot, m.chat.id, "⚠️ Произошла ошибка.\nНапишите в поддержку: @guard_gpt")
-        
+
 @router.callback_query(F.data == "new_image")
 async def new_image_any_state(c: CallbackQuery, state: FSMContext) -> None:
     """✅ Полный сброс состояния"""
@@ -628,6 +581,8 @@ async def new_image_any_state(c: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await start_generation(c.message, state, show_intro=True)
 
+
+        
 @router.callback_query(GenStates.final_menu, F.data == "regenerate")
 async def regenerate(c: CallbackQuery, state: FSMContext) -> None:
     """✅ Сгенерировать похожее - используем seed"""
@@ -636,6 +591,7 @@ async def regenerate(c: CallbackQuery, state: FSMContext) -> None:
     prompt = data.get("prompt")
     photos: List[Dict[str, str]] = data.get("photos")
     seed = data.get("last_seed")
+    aspect_ratio = data.get("aspect_ratio", "9:16")
     
     if not (prompt and photos):
         await safe_send_text(c.bot, c.message.chat.id, "⚠️ Произошла ошибка.\nНапишите в поддержку: @guard_gpt")
@@ -653,12 +609,14 @@ async def regenerate(c: CallbackQuery, state: FSMContext) -> None:
             c.from_user.id, 
             prompt, 
             file_ids,
+            aspect_ratio=aspect_ratio,
             image_resolution=image_resolution,
             max_images=max_images,
             seed=seed
         )
     except Exception:
         await safe_send_text(c.bot, c.message.chat.id, "⚠️ Произошла ошибка.\nНапишите в поддержку: @guard_gpt")
+
 
 @router.callback_query(GenStates.final_menu, F.data == "send_file")
 async def send_file_cb(c: CallbackQuery, state: FSMContext) -> None:
@@ -692,7 +650,7 @@ async def send_generation_result(
     seed: Optional[int],
     bot: Bot,
 ) -> None:
-    """✅ Отправка результатов генерации"""
+    """Отправка результатов генерации + удаление временных файлов"""
     from aiogram.fsm.context import FSMContext
     from aiogram.fsm.storage.redis import RedisStorage, DefaultKeyBuilder
     from aiogram.fsm.storage.base import StorageKey
@@ -714,6 +672,7 @@ async def send_generation_result(
 
     mode = (data.get("mode") or "edit").lower().strip()
 
+    # Отправка изображений
     for idx, (img_url, fp) in enumerate(zip(image_urls, file_paths)):
         caption = None
         reply_markup = None
@@ -724,9 +683,19 @@ async def send_generation_result(
         
         await safe_send_photo(bot, chat_id, img_url, caption=caption, reply_markup=reply_markup)
     
+    # Отправка файлов в максимальном качестве
     for fp in file_paths:
         if os.path.exists(fp):
             await safe_send_document(bot, chat_id, fp, caption="Скачать в максимальном качестве")
+    
+    # 🆕 УДАЛЕНИЕ ВРЕМЕННЫХ ФАЙЛОВ после отправки
+    for fp in file_paths:
+        if os.path.exists(fp):
+            try:
+                os.remove(fp)
+                log.info(_j("temp_file_deleted", path=fp))
+            except Exception as e:
+                log.warning(_j("temp_file_delete_failed", path=fp, error=str(e)))
     
     if mode == "create_edit":
         mode = "create"
@@ -736,7 +705,7 @@ async def send_generation_result(
             mode="create",
             prompt=prompt,
             last_result_urls=image_urls,
-            file_paths=file_paths,
+            file_paths=[],
             wait_msg_id=None,
             last_seed=seed,
         )
@@ -746,13 +715,16 @@ async def send_generation_result(
     photos = data.get("photos", [])
     base_prompt = data.get("base_prompt") or prompt
     edits = data.get("edits") or []
+    aspect_ratio = data.get("aspect_ratio", "9:16")
+    
     await state.update_data(
         mode="edit",
         prompt=prompt,
         base_prompt=base_prompt,
         edits=edits,
         photos=photos,
-        file_paths=file_paths,
+        file_paths=[],
         last_seed=seed,
+        aspect_ratio=aspect_ratio,
     )
     await state.set_state(GenStates.final_menu)

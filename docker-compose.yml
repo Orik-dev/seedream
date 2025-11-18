@@ -29,7 +29,7 @@ services:
     command: >
       sh -c " while true; do
         python cleanup_redis.py;
-        sleep 3600;
+        sleep 1600;
       done "
     env_file: .env
     depends_on:
